@@ -191,4 +191,15 @@
       </extension>
     </extensions>
   </build>
+
+  <distributionManagement>
+    <snapshotRepository>
+      <id>snapshots</id>
+      <url>http://mvn.hongxi.org/nexus/content/repositories/snapshots</url>
+    </snapshotRepository>
+    <repository>
+      <id>releases</id>
+      <url>http://mvn.hongxi.org/nexus/content/repositories/releases</url>
+    </repository>
+  </distributionManagement>
 </project>

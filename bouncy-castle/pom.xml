@@ -39,6 +39,6 @@
     <module>bcfips</module>
 
     <!--2 module for fips version test-->
-    <module>bcfips-include-test</module>
+<!--    <module>bcfips-include-test</module>-->
   </modules>
 </project>

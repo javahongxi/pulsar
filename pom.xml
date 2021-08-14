@@ -1254,6 +1254,18 @@ flexible messaging model and an intuitive client API.</description>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
           <argLine> -Xmx1G -XX:+UseG1GC
@@ -1962,7 +1974,7 @@ flexible messaging model and an intuitive client API.</description>
         <module>pulsar-client-admin-api</module>
         <module>pulsar-client-admin</module>
         <module>pulsar-client-tools</module>
-        <module>pulsar-client-tools-test</module>
+<!--        <module>pulsar-client-tools-test</module>-->
         <module>pulsar-websocket</module>
         <module>pulsar-proxy</module>
         <module>pulsar-discovery-service</module>
@@ -2229,5 +2241,16 @@ flexible messaging model and an intuitive client API.</description>
       </snapshots>
     </repository>
   </repositories>
+
+  <distributionManagement>
+    <snapshotRepository>
+      <id>snapshots</id>
+      <url>http://mvn.hongxi.org/nexus/content/repositories/snapshots</url>
+    </snapshotRepository>
+    <repository>
+      <id>releases</id>
+      <url>http://mvn.hongxi.org/nexus/content/repositories/releases</url>
+    </repository>
+  </distributionManagement>
 
 </project>
