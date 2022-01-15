@@ -69,13 +69,9 @@ jobs:
         uses: actions/setup-java@v2
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
         with:
-          distribution: 'adopt'
+          distribution: 'temurin'
           java-version: 11
 
-
-      - name: Replace maven's wagon-http version
-        if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
-        run: sudo ./build/replace_maven-wagon-http-version.sh
 
       # license check fails with 3.6.2 so we have to downgrade
       - name: Set up Maven
@@ -90,4 +86,4 @@ jobs:
 
       - name: license check
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
-        run: src/check-binary-license ./distribution/server/target/apache-pulsar-*-bin.tar.gz
+        run: src/check-binary-license.sh ./distribution/server/target/apache-pulsar-*-bin.tar.gz

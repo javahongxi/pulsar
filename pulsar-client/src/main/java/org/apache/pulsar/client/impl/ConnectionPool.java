@@ -98,9 +98,14 @@ public class ConnectionPool implements Closeable {
             log.error("Failed to create channel initializer");
             throw new PulsarClientException(e);
         }
-
-        this.dnsResolver = new DnsNameResolverBuilder(eventLoopGroup.next()).traceEnabled(true)
-                .channelType(EventLoopUtil.getDatagramChannelClass(eventLoopGroup)).build();
+        DnsNameResolverBuilder dnsNameResolverBuilder = new DnsNameResolverBuilder(eventLoopGroup.next())
+                .traceEnabled(true).channelType(EventLoopUtil.getDatagramChannelClass(eventLoopGroup));
+        if (conf.getDnsLookupBindAddress() != null) {
+            InetSocketAddress addr = new InetSocketAddress(conf.getDnsLookupBindAddress(),
+                    conf.getDnsLookupBindPort());
+            dnsNameResolverBuilder.localAddress(addr);
+        }
+        this.dnsResolver = dnsNameResolverBuilder.build();
     }
 
     private static final Random random = new Random();
@@ -272,7 +277,6 @@ public class ConnectionPool implements Closeable {
         return future;
     }
 
-    @VisibleForTesting
     CompletableFuture<List<InetAddress>> resolveName(String hostname) {
         CompletableFuture<List<InetAddress>> future = new CompletableFuture<>();
         dnsResolver.resolveAll(hostname).addListener((Future<List<InetAddress>> resolveFuture) -> {

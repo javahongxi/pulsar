@@ -19,18 +19,16 @@
 package org.apache.bookkeeper.mledger.impl;
 
 import com.google.protobuf.InvalidProtocolBufferException;
-
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.CompositeByteBuf;
+import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.CompositeByteBuf;
-import io.netty.buffer.Unpooled;
+import java.util.concurrent.RejectedExecutionException;
 import lombok.extern.slf4j.Slf4j;
-
 import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.MetaStoreException;
@@ -119,7 +117,13 @@ public class MetaStoreImpl implements MetaStore {
                     }
                 }, executor.chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    try {
+                        executor.executeOrdered(ledgerName,
+                                SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    } catch (RejectedExecutionException e) {
+                        //executor maybe shutdown, use common pool to run callback.
+                        CompletableFuture.runAsync(() -> callback.operationFailed(getException(ex)));
+                    }
                     return null;
                 });
     }
@@ -133,9 +137,11 @@ public class MetaStoreImpl implements MetaStore {
 
         String path = PREFIX + ledgerName;
         store.put(path, compressLedgerInfo(mlInfo), Optional.of(stat.getVersion()))
-                .thenAcceptAsync(newVersion -> callback.operationComplete(null, newVersion), executor.chooseThread(ledgerName))
+                .thenAcceptAsync(newVersion -> callback.operationComplete(null, newVersion),
+                        executor.chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback
+                            .operationFailed(getException(ex))));
                     return null;
                 });
     }
@@ -148,9 +154,11 @@ public class MetaStoreImpl implements MetaStore {
 
         String path = PREFIX + ledgerName;
         store.getChildren(path)
-                .thenAcceptAsync(cursors -> callback.operationComplete(cursors, null), executor.chooseThread(ledgerName))
+                .thenAcceptAsync(cursors -> callback.operationComplete(cursors, null), executor
+                        .chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback
+                            .operationFailed(getException(ex))));
                     return null;
                 });
     }
@@ -177,7 +185,8 @@ public class MetaStoreImpl implements MetaStore {
                     }
                 }, executor.chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback
+                            .operationFailed(getException(ex))));
                     return null;
                 });
     }
@@ -206,9 +215,11 @@ public class MetaStoreImpl implements MetaStore {
         }
 
         store.put(path, content, Optional.of(expectedVersion))
-                .thenAcceptAsync(optStat -> callback.operationComplete(null, optStat), executor.chooseThread(ledgerName))
+                .thenAcceptAsync(optStat -> callback.operationComplete(null, optStat), executor
+                        .chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback
+                            .operationFailed(getException(ex))));
                     return null;
                 });
     }
@@ -226,7 +237,8 @@ public class MetaStoreImpl implements MetaStore {
                     callback.operationComplete(null, null);
                 }, executor.chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback
+                            .operationFailed(getException(ex))));
                     return null;
                 });
     }
@@ -244,7 +256,8 @@ public class MetaStoreImpl implements MetaStore {
                     callback.operationComplete(null, null);
                 }, executor.chooseThread(ledgerName))
                 .exceptionally(ex -> {
-                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback.operationFailed(getException(ex))));
+                    executor.executeOrdered(ledgerName, SafeRunnable.safeRun(() -> callback
+                            .operationFailed(getException(ex))));
                     return null;
                 });
     }
@@ -310,7 +323,6 @@ public class MetaStoreImpl implements MetaStore {
             return managedLedgerInfo.toByteArray();
         }
         ByteBuf metadataByteBuf = null;
-        ByteBuf uncompressedByteBuf = null;
         ByteBuf encodeByteBuf = null;
         try {
             MLDataFormats.ManagedLedgerInfoMetadata mlInfoMetadata = MLDataFormats.ManagedLedgerInfoMetadata
@@ -323,13 +335,9 @@ public class MetaStoreImpl implements MetaStore {
             metadataByteBuf.writeShort(MAGIC_MANAGED_LEDGER_INFO_METADATA);
             metadataByteBuf.writeInt(mlInfoMetadata.getSerializedSize());
             metadataByteBuf.writeBytes(mlInfoMetadata.toByteArray());
-            byte[] byteArray = managedLedgerInfo.toByteArray();
-            // The reason for copy the data to a direct buffer here is to ensure the metadata compression feature can
-            // work on JDK1.8, for more details to see: https://github.com/apache/pulsar/issues/11593
-            uncompressedByteBuf = Unpooled.directBuffer(byteArray.length);
-            uncompressedByteBuf.writeBytes(byteArray);
+
             encodeByteBuf = getCompressionCodec(compressionType)
-                    .encode(uncompressedByteBuf);
+                    .encode(Unpooled.wrappedBuffer(managedLedgerInfo.toByteArray()));
             CompositeByteBuf compositeByteBuf = PulsarByteBufAllocator.DEFAULT.compositeBuffer();
             compositeByteBuf.addComponent(true, metadataByteBuf);
             compositeByteBuf.addComponent(true, encodeByteBuf);
@@ -339,9 +347,6 @@ public class MetaStoreImpl implements MetaStore {
         } finally {
             if (metadataByteBuf != null) {
                 metadataByteBuf.release();
-            }
-            if (uncompressedByteBuf != null) {
-                uncompressedByteBuf.release();
             }
             if (encodeByteBuf != null) {
                 encodeByteBuf.release();
@@ -353,7 +358,6 @@ public class MetaStoreImpl implements MetaStore {
         ByteBuf byteBuf = Unpooled.wrappedBuffer(data);
         if (byteBuf.readableBytes() > 0 && byteBuf.readShort() == MAGIC_MANAGED_LEDGER_INFO_METADATA) {
             ByteBuf decodeByteBuf = null;
-            ByteBuf compressedByteBuf = null;
             try {
                 int metadataSize = byteBuf.readInt();
                 byte[] metadataBytes = new byte[metadataSize];
@@ -362,12 +366,8 @@ public class MetaStoreImpl implements MetaStore {
                         MLDataFormats.ManagedLedgerInfoMetadata.parseFrom(metadataBytes);
 
                 long unpressedSize = metadata.getUncompressedSize();
-                // The reason for copy the data to a direct buffer here is to ensure the metadata compression feature
-                // can work on JDK1.8, for more details to see: https://github.com/apache/pulsar/issues/11593
-                compressedByteBuf = Unpooled.directBuffer(byteBuf.readableBytes());
-                compressedByteBuf.writeBytes(byteBuf);
                 decodeByteBuf = getCompressionCodec(metadata.getCompressionType())
-                        .decode(compressedByteBuf, (int) unpressedSize);
+                        .decode(byteBuf, (int) unpressedSize);
                 byte[] decodeBytes;
                 // couldn't decode data by ZLIB compression byteBuf array() directly
                 if (decodeByteBuf.hasArray() && !CompressionType.ZLIB.equals(metadata.getCompressionType())) {
@@ -384,9 +384,6 @@ public class MetaStoreImpl implements MetaStore {
             } finally {
                 if (decodeByteBuf != null) {
                     decodeByteBuf.release();
-                }
-                if (compressedByteBuf != null) {
-                    compressedByteBuf.release();
                 }
                 byteBuf.release();
             }

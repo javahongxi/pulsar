@@ -81,6 +81,7 @@ import org.apache.pulsar.common.protocol.schema.SchemaData;
 import org.apache.pulsar.common.schema.SchemaType;
 import org.apache.pulsar.common.stats.Metrics;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
+import org.apache.pulsar.schema.Schemas;
 import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
@@ -353,7 +354,7 @@ public class PersistentTopicE2ETest extends BrokerTestBase {
 
                     Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subName)
                             .receiverQueueSize(recvQueueSize).subscribe();
-                    for (int i = 0; i < recvQueueSize / numConsumersThreads; i++) {
+                    for (int j = 0; j < recvQueueSize / numConsumersThreads; j++) {
                         Message<byte[]> msg = consumer.receive();
                         consumer.acknowledge(msg);
                     }
@@ -729,6 +730,32 @@ public class PersistentTopicE2ETest extends BrokerTestBase {
         assertFalse(binaryLookupService.getSchema(TopicName.get(topicName), ByteBuffer.allocate(8).putLong(0).array()).get().isPresent());
 
         assertFalse(topicHasSchema(topicName));
+    }
+
+    @Test
+    public void testConcurrentlyDeleteSchema() throws Exception {
+        String topic = "persistent://prop/ns-delete-schema/concurrently-delete-schema-test";
+        int partitions = 50;
+        admin.namespaces().createNamespace("prop/ns-delete-schema", 3);
+        admin.topics().createPartitionedTopic(topic, partitions);
+
+        Producer producer = pulsarClient
+                .newProducer(Schema.JSON(Schemas.BytesRecord.class))
+                .topic(topic)
+                .create();
+        producer.close();
+
+        CompletableFuture[] asyncFutures = new CompletableFuture[partitions];
+        for (int i = 0; i < partitions; i++) {
+            asyncFutures[i] = getTopic(TopicName.get(topic).getPartition(i).toString()).get().deleteSchema();
+        }
+
+        try {
+            // delete the schema concurrently, and wait for the end of all operations
+            CompletableFuture.allOf(asyncFutures).join();
+        } catch (Exception e) {
+            fail("Should not fail");
+        }
     }
 
     /**
@@ -1520,9 +1547,9 @@ public class PersistentTopicE2ETest extends BrokerTestBase {
         assertNotNull(map);
         assertEquals((long) map.get("brk_connection_created_total_count"), 2);
         assertEquals((long) map.get("brk_active_connections"), 0);
-        assertEquals((long) map.get("brk_connection_closed_total_count") , 2);
+        assertEquals((long) map.get("brk_connection_closed_total_count"), 2);
         assertEquals((long) map.get("brk_connection_create_success_count"), 1);
-        assertEquals((long) map.get("brk_connection_create_fail_count") , 1);
+        assertEquals((long) map.get("brk_connection_create_fail_count"), 1);
     }
 
     @Test
@@ -1786,5 +1813,50 @@ public class PersistentTopicE2ETest extends BrokerTestBase {
         assertNotNull(msg);
         assertEquals(msg.getValue(), "test");
         assertEquals(msg.getEventTime(), 5);
+    }
+
+    @Test
+    public void testProducerBusy() throws Exception {
+        final String topicName = "prop/ns-abc/producer-busy-" + System.nanoTime();
+
+        @Cleanup
+        Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
+                .topic(topicName)
+                .producerName("xxx")
+                .create();
+
+        assertEquals(admin.topics().getStats(topicName).getPublishers().size(), 1);
+
+        for (int i =0; i < 5; i++) {
+            try {
+                pulsarClient.newProducer(Schema.STRING)
+                        .topic(topicName)
+                        .producerName("xxx")
+                        .create();
+                fail("Should have failed");
+            } catch (ProducerBusyException e) {
+                // Expected
+            }
+
+            assertEquals(admin.topics().getStats(topicName).getPublishers().size(), 1);
+        }
+
+        // Try from different connection
+        @Cleanup
+        PulsarClient client2 = PulsarClient.builder()
+                .serviceUrl(getPulsar().getBrokerServiceUrl())
+                .build();
+
+        try {
+            client2.newProducer(Schema.STRING)
+                    .topic(topicName)
+                    .producerName("xxx")
+                    .create();
+            fail("Should have failed");
+        } catch (ProducerBusyException e) {
+            // Expected
+        }
+
+        assertEquals(admin.topics().getStats(topicName).getPublishers().size(), 1);
     }
 }

@@ -20,10 +20,6 @@ package org.apache.pulsar.common.policies.data;
 
 import static org.testng.Assert.assertEquals;
 
-import org.apache.pulsar.common.policies.data.SubscriptionStats;
-import org.apache.pulsar.common.policies.data.TopicStats;
-import org.apache.pulsar.common.policies.data.PublisherStats;
-import org.apache.pulsar.common.policies.data.ReplicatorStats;
 import org.apache.pulsar.common.policies.data.stats.PublisherStatsImpl;
 import org.apache.pulsar.common.policies.data.stats.ReplicatorStatsImpl;
 import org.apache.pulsar.common.policies.data.stats.SubscriptionStatsImpl;
@@ -60,6 +56,10 @@ public class PersistentTopicStatsTest {
         assertEquals(topicStats.publishers.size(), 1);
         assertEquals(topicStats.subscriptions.size(), 1);
         assertEquals(topicStats.replication.size(), 1);
+        assertEquals(topicStats.compaction.lastCompactionRemovedEventCount, 0);
+        assertEquals(topicStats.compaction.lastCompactionSucceedTimestamp, 0);
+        assertEquals(topicStats.compaction.lastCompactionFailedTimestamp, 0);
+        assertEquals(topicStats.compaction.lastCompactionDurationTimeInMills, 0);
         topicStats.reset();
         assertEquals(topicStats.msgRateIn, 0.0);
         assertEquals(topicStats.msgThroughputIn, 0.0);

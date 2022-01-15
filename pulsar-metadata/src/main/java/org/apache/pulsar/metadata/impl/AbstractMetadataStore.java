@@ -24,26 +24,27 @@ import com.github.benmanes.caffeine.cache.AsyncCacheLoader;
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
-
 import io.netty.util.concurrent.DefaultThreadFactory;
-
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-
+import java.util.stream.Collectors;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.metadata.api.GetResult;
 import org.apache.pulsar.metadata.api.MetadataCache;
 import org.apache.pulsar.metadata.api.MetadataSerde;
+import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.apache.pulsar.metadata.api.Notification;
 import org.apache.pulsar.metadata.api.NotificationType;
 import org.apache.pulsar.metadata.api.Stat;
@@ -59,10 +60,15 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
 
     private final CopyOnWriteArrayList<Consumer<Notification>> listeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<Consumer<SessionEvent>> sessionListeners = new CopyOnWriteArrayList<>();
-    private final ExecutorService executor;
+    protected final ScheduledExecutorService executor;
     private final AsyncLoadingCache<String, List<String>> childrenCache;
     private final AsyncLoadingCache<String, Boolean> existsCache;
     private final CopyOnWriteArrayList<MetadataCacheImpl<?>> metadataCaches = new CopyOnWriteArrayList<>();
+
+    // We don't strictly need to use 'volatile' here because we don't need the precise consistent semantic. Instead,
+    // we want to avoid the overhead of 'volatile'.
+    @Getter
+    private boolean isConnected = true;
 
     protected abstract CompletableFuture<List<String>> getChildrenFromStore(String path);
 
@@ -70,7 +76,7 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
 
     protected AbstractMetadataStore() {
         this.executor = Executors
-                .newSingleThreadExecutor(new DefaultThreadFactory("metadata-store"));
+                .newSingleThreadScheduledExecutor(new DefaultThreadFactory("metadata-store"));
         registerListener(this);
 
         this.childrenCache = Caffeine.newBuilder()
@@ -84,7 +90,12 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
                     @Override
                     public CompletableFuture<List<String>> asyncReload(String key, List<String> oldValue,
                             Executor executor) {
-                        return getChildrenFromStore(key);
+                        if (isConnected) {
+                            return getChildrenFromStore(key);
+                        } else {
+                            // Do not refresh if we're not connected
+                            return CompletableFuture.completedFuture(oldValue);
+                        }
                     }
                 });
 
@@ -99,7 +110,12 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
                     @Override
                     public CompletableFuture<Boolean> asyncReload(String key, Boolean oldValue,
                             Executor executor) {
-                        return existsFromStore(key);
+                        if (isConnected) {
+                            return existsFromStore(key);
+                        } else {
+                            // Do not refresh if we're not connected
+                            return CompletableFuture.completedFuture(oldValue);
+                        }
                     }
                 });
     }
@@ -127,12 +143,33 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
     }
 
     @Override
+    public CompletableFuture<Optional<GetResult>> get(String path) {
+        if (!isValidPath(path)) {
+            return FutureUtil.failedFuture(new MetadataStoreException.InvalidPathException(path));
+        }
+        return storeGet(path);
+    }
+
+    protected abstract CompletableFuture<Optional<GetResult>> storeGet(String path);
+
+    @Override
+    public CompletableFuture<Stat> put(String path, byte[] value, Optional<Long> expectedVersion) {
+        return put(path, value, expectedVersion, EnumSet.noneOf(CreateOption.class));
+    }
+
+    @Override
     public final CompletableFuture<List<String>> getChildren(String path) {
+        if (!isValidPath(path)) {
+            return FutureUtil.failedFuture(new MetadataStoreException.InvalidPathException(path));
+        }
         return childrenCache.get(path);
     }
 
     @Override
     public final CompletableFuture<Boolean> exists(String path) {
+        if (!isValidPath(path)) {
+            return FutureUtil.failedFuture(new MetadataStoreException.InvalidPathException(path));
+        }
         return existsCache.get(path);
     }
 
@@ -185,6 +222,9 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
 
     @Override
     public final CompletableFuture<Void> delete(String path, Optional<Long> expectedVersion) {
+        if (!isValidPath(path)) {
+            return FutureUtil.failedFuture(new MetadataStoreException.InvalidPathException(path));
+        }
         // Ensure caches are invalidated before the operation is confirmed
         return storeDelete(path, expectedVersion)
                 .thenRun(() -> {
@@ -198,12 +238,32 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
                 });
     }
 
+    @Override
+    public CompletableFuture<Void> deleteRecursive(String path) {
+        return getChildren(path)
+                .thenCompose(children -> FutureUtil.waitForAll(
+                        children.stream()
+                                .map(child -> deleteRecursive(path + "/" + child))
+                                .collect(Collectors.toList())))
+                .thenCompose(__ -> exists(path))
+                .thenCompose(exists -> {
+                    if (exists) {
+                        return delete(path, Optional.empty());
+                    } else {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                });
+    }
+
     protected abstract CompletableFuture<Stat> storePut(String path, byte[] data, Optional<Long> optExpectedVersion,
-            EnumSet<CreateOption> options);
+                                                        EnumSet<CreateOption> options);
 
     @Override
     public final CompletableFuture<Stat> put(String path, byte[] data, Optional<Long> optExpectedVersion,
             EnumSet<CreateOption> options) {
+        if (!isValidPath(path)) {
+            return FutureUtil.failedFuture(new MetadataStoreException.InvalidPathException(path));
+        }
         // Ensure caches are invalidated before the operation is confirmed
         return storePut(path, data, optExpectedVersion, options)
                 .thenApply(stat -> {
@@ -217,7 +277,7 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
                         }
                     }
 
-                    metadataCaches.forEach(c -> c.invalidate(path));
+                    metadataCaches.forEach(c -> c.refresh(path));
                     return stat;
                 });
     }
@@ -228,6 +288,8 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
     }
 
     protected void receivedSessionEvent(SessionEvent event) {
+        isConnected = event.isConnected();
+
         sessionListeners.forEach(l -> {
             try {
                 l.accept(event);
@@ -250,7 +312,7 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
     }
 
     /**
-     * Run the task in the executor thread and fail the future if the executor is shutting down
+     * Run the task in the executor thread and fail the future if the executor is shutting down.
      */
     protected void execute(Runnable task, CompletableFuture<?> future) {
         try {
@@ -268,5 +330,26 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
         }
 
         return path.substring(0, idx);
+    }
+
+    /**
+     * valid path in metadata store should be
+     * 1. not blank
+     * 2. starts with '/'
+     * 3. not ends with '/', except root path "/"
+     */
+   static boolean isValidPath(String path) {
+        return StringUtils.equals(path, "/")
+                || StringUtils.isNotBlank(path)
+                && path.startsWith("/")
+                && !path.endsWith("/");
+    }
+
+    protected void notifyParentChildrenChanged(String path) {
+        String parent = parent(path);
+        while (parent != null) {
+            receivedNotification(new Notification(NotificationType.ChildrenChanged, parent));
+            parent = parent(parent);
+        }
     }
 }

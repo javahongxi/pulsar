@@ -25,7 +25,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -48,19 +47,17 @@ import org.testng.annotations.Test;
 
 public class ConsumerImplTest {
 
-
     private ExecutorProvider executorProvider;
+    private ExecutorService internalExecutor;
     private ConsumerImpl<byte[]> consumer;
     private ConsumerConfigurationData consumerConf;
-    private ExecutorService executorService;
 
     @BeforeMethod(alwaysRun = true)
     public void setUp() {
         executorProvider = new ExecutorProvider(1, "ConsumerImplTest");
+        internalExecutor = Executors.newSingleThreadScheduledExecutor();
         consumerConf = new ConsumerConfigurationData<>();
-        PulsarClientImpl client = ClientTestFixtures.createPulsarClientMock();
-        executorService = Executors.newSingleThreadExecutor();
-        when(client.getInternalExecutorService()).thenReturn(executorService);
+        PulsarClientImpl client = ClientTestFixtures.createPulsarClientMock(executorProvider, internalExecutor);
         ClientConfigurationData clientConf = client.getConfiguration();
         clientConf.setOperationTimeoutMs(100);
         clientConf.setStatsIntervalSeconds(0);
@@ -80,9 +77,9 @@ public class ConsumerImplTest {
             executorProvider.shutdownNow();
             executorProvider = null;
         }
-        if (executorService != null) {
-            executorService.shutdownNow();
-            executorService = null;
+        if (internalExecutor != null) {
+            internalExecutor.shutdownNow();
+            internalExecutor = null;
         }
     }
 
@@ -172,7 +169,7 @@ public class ConsumerImplTest {
     public void testReceiveAsyncCanBeCancelled() {
         // given
         CompletableFuture<Message<byte[]>> future = consumer.receiveAsync();
-        Awaitility.await().untilAsserted(() -> Assert.assertEquals(consumer.peekPendingReceive(), future));
+        Awaitility.await().untilAsserted(() -> Assert.assertTrue(consumer.hasNextPendingReceive()));
         // when
         future.cancel(true);
         // then
@@ -188,5 +185,36 @@ public class ConsumerImplTest {
         future.cancel(true);
         // then
         Assert.assertFalse(consumer.hasPendingBatchReceive());
+    }
+
+    @Test
+    public void testClose() {
+        Exception checkException = null;
+        try {
+            if (consumer != null) {
+                consumer.negativeAcknowledge(new MessageIdImpl(-1, -1, -1));
+                consumer.close();
+            }
+        } catch (Exception e) {
+            checkException = e;
+        }
+        Assert.assertNull(checkException);
+    }
+
+    @Test
+    public void testConsumerCreatedWhilePaused() throws InterruptedException {
+        PulsarClientImpl client = ClientTestFixtures.createPulsarClientMock(executorProvider, internalExecutor);
+        ClientConfigurationData clientConf = client.getConfiguration();
+        clientConf.setOperationTimeoutMs(100);
+        clientConf.setStatsIntervalSeconds(0);
+        String topic = "non-persistent://tenant/ns1/my-topic";
+
+        consumerConf.setStartPaused(true);
+
+        consumer = ConsumerImpl.newConsumerImpl(client, topic, consumerConf,
+                executorProvider, -1, false, new CompletableFuture<>(), null, null, null,
+                true);
+
+        Assert.assertTrue(consumer.paused);
     }
 }

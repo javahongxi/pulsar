@@ -78,7 +78,7 @@ The following commands ask you a few questions and then create the certificates.
 > #### Tips
 > 
 > Sometimes matching the hostname is not possible or makes no sense,
-> such as when you creat the brokers with random hostnames, or you
+> such as when you create the brokers with random hostnames, or you
 > plan to connect to the hosts via their IP. In these cases, you 
 > should configure the client to disable TLS hostname verification. For more
 > details, you can see [the host verification section in client configuration](#hostname-verification).
@@ -120,7 +120,8 @@ To configure a Pulsar [broker](reference-terminology.md#broker) to use TLS trans
 Add these values to the configuration file (substituting the appropriate certificate paths where necessary):
 
 ```properties
-tlsEnabled=true
+brokerServicePortTls=6651
+webServicePortTls=8081
 tlsRequireTrustedClientCertOnConnect=true
 tlsCertificateFilePath=/path/to/broker.cert.pem
 tlsKeyFilePath=/path/to/broker.key-pk8.pem

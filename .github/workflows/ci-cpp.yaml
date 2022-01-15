@@ -68,7 +68,7 @@ jobs:
         uses: actions/setup-java@v2
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
         with:
-          distribution: 'adopt'
+          distribution: 'temurin'
           java-version: 11
 
       - name: clean disk
@@ -77,10 +77,6 @@ jobs:
           sudo apt clean
           docker rmi $(docker images -q) -f
           df -h
-
-      - name: Replace maven's wagon-http version
-        if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
-        run: sudo ./build/replace_maven-wagon-http-version.sh
 
       - name: build package
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}

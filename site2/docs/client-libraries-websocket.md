@@ -69,7 +69,7 @@ All exchanges via the WebSocket API use JSON.
 
 ### Authentication
 
-#### Broswer javascript WebSocket client
+#### Browser javascript WebSocket client
 
 Use the query param `token` transport the authentication token.
 
@@ -180,22 +180,59 @@ Server will push messages on the WebSocket session:
 
 ```json
 {
-  "messageId": "CAAQAw==",
-  "payload": "SGVsbG8gV29ybGQ=",
-  "properties": {"key1": "value1", "key2": "value2"},
-  "publishTime": "2016-08-30 16:45:57.785",
-  "redeliveryCount": 4
+  "messageId": "CAMQADAA",
+  "payload": "hvXcJvHW7kOSrUn17P2q71RA5SdiXwZBqw==",
+  "properties": {},
+  "publishTime": "2021-10-29T16:01:38.967-07:00",
+  "redeliveryCount": 0,
+  "encryptionContext": {
+    "keys": {
+      "client-rsa.pem": {
+        "keyValue": "jEuwS+PeUzmCo7IfLNxqoj4h7txbLjCQjkwpaw5AWJfZ2xoIdMkOuWDkOsqgFmWwxiecakS6GOZHs94x3sxzKHQx9Oe1jpwBg2e7L4fd26pp+WmAiLm/ArZJo6JotTeFSvKO3u/yQtGTZojDDQxiqFOQ1ZbMdtMZA8DpSMuq+Zx7PqLo43UdW1+krjQfE5WD+y+qE3LJQfwyVDnXxoRtqWLpVsAROlN2LxaMbaftv5HckoejJoB4xpf/dPOUqhnRstwQHf6klKT5iNhjsY4usACt78uILT0pEPd14h8wEBidBz/vAlC/zVMEqiDVzgNS7dqEYS4iHbf7cnWVCn3Hxw==",
+        "metadata": {}
+      }
+    },
+    "param": "Tfu1PxVm6S9D3+Hk",
+    "compressionType": "NONE",
+    "uncompressedMessageSize": 0,
+    "batchSize": {
+      "empty": false,
+      "present": true
+    }
+  }
 }
 ```
 
-Key | Type | Required? | Explanation
-:---|:-----|:----------|:-----------
-`messageId` | string | yes | Message ID
-`payload` | string | yes | Base-64 encoded payload
-`publishTime` | string | yes | Publish timestamp
-`redeliveryCount` | number | yes | Number of times this message was already delivered
-`properties` | key-value pairs | no | Application-defined properties
-`key` | string | no |  Original routing key set by producer
+Below are the parameters in the WebSocket consumer response.
+
+- General parameters
+
+    Key | Type | Required? | Explanation
+    :---|:-----|:----------|:-----------
+    `messageId` | string | yes | Message ID
+    `payload` | string | yes | Base-64 encoded payload
+    `publishTime` | string | yes | Publish timestamp
+    `redeliveryCount` | number | yes | Number of times this message was already delivered
+    `properties` | key-value pairs | no | Application-defined properties
+    `key` | string | no |  Original routing key set by producer
+    `encryptionContext` | EncryptionContext | no | Encryption context that consumers can use to decrypt received messages
+    `param` | string | no | Initialization vector for cipher (Base64 encoding)
+    `batchSize` | string | no | Number of entries in a message (if it is a batch message)
+    `uncompressedMessageSize` | string | no | Message size before compression
+    `compressionType` | string | no | Algorithm used to compress the message payload
+
+- `encryptionContext` related parameter
+
+    Key | Type | Required? | Explanation
+    :---|:-----|:----------|:-----------
+    `keys` |key-EncryptionKey pairs | yes | Key in `key-EncryptionKey` pairs is an encryption key name. Value in `key-EncryptionKey` pairs is an encryption key object.
+
+- `encryptionKey` related parameters
+
+    Key | Type | Required? | Explanation
+    :---|:-----|:----------|:-----------
+    `keyValue` | string | yes | Encryption key (Base64 encoding)
+    `metadata` | key-value pairs | no | Application-defined metadata
 
 #### Acknowledging the message
 
@@ -403,9 +440,15 @@ TOPIC = scheme + '://localhost:8080/ws/v2/producer/persistent/public/default/my-
 
 ws = websocket.create_connection(TOPIC)
 
+# encode message
+s = "Hello World"
+firstEncoded = s.encode("UTF-8")
+binaryEncoded = base64.b64encode(firstEncoded)
+payloadString = binaryEncoded.decode('UTF-8')
+
 # Send one message as JSON
 ws.send(json.dumps({
-    'payload' : base64.b64encode('Hello World'),
+    'payload' : payloadString,
     'properties': {
         'key1' : 'value1',
         'key2' : 'value2'
@@ -415,9 +458,9 @@ ws.send(json.dumps({
 
 response =  json.loads(ws.recv())
 if response['result'] == 'ok':
-    print 'Message published successfully'
+    print( 'Message published successfully')
 else:
-    print 'Failed to publish message:', response
+    print('Failed to publish message:', response)
 ws.close()
 ```
 
@@ -442,7 +485,7 @@ while True:
     msg = json.loads(ws.recv())
     if not msg: break
 
-    print "Received: {} - payload: {}".format(msg, base64.b64decode(msg['payload']))
+    print( "Received: {} - payload: {}".format(msg, base64.b64decode(msg['payload'])))
 
     # Acknowledge successful processing
     ws.send(json.dumps({'messageId' : msg['messageId']}))
@@ -470,7 +513,7 @@ while True:
     msg = json.loads(ws.recv())
     if not msg: break
 
-    print "Received: {} - payload: {}".format(msg, base64.b64decode(msg['payload']))
+    print ( "Received: {} - payload: {}".format(msg, base64.b64decode(msg['payload'])))
 
     # Acknowledge successful processing
     ws.send(json.dumps({'messageId' : msg['messageId']}))

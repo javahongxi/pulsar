@@ -19,7 +19,6 @@
 package org.apache.pulsar.client.impl.conf;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.google.common.collect.Sets;
 
 import io.swagger.annotations.ApiModelProperty;
 import java.net.InetSocketAddress;
@@ -38,6 +37,7 @@ import org.apache.pulsar.client.impl.auth.AuthenticationDisabled;
 
 import java.io.Serializable;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.util.Secret;
 
@@ -91,13 +91,19 @@ public class ClientConfigurationData implements Serializable, Cloneable {
 
     @ApiModelProperty(
             name = "operationTimeoutMs",
-            value = "Client operation timeout (in millisecond)."
+            value = "Client operation timeout (in milliseconds)."
     )
     private long operationTimeoutMs = 30000;
 
     @ApiModelProperty(
+            name = "lookupTimeoutMs",
+            value = "Client lookup timeout (in milliseconds)."
+    )
+    private long lookupTimeoutMs = -1;
+
+    @ApiModelProperty(
             name = "statsIntervalSeconds",
-            value = " Interval to print client stats (in second)."
+            value = "Interval to print client stats (in seconds)."
     )
     private long statsIntervalSeconds = 60;
 
@@ -116,6 +122,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @ApiModelProperty(
             name = "connectionsPerBroker",
             value = "Number of connections established between the client and each Broker."
+                    + " A value of 0 means to disable connection pooling."
     )
     private int connectionsPerBroker = 1;
 
@@ -253,13 +260,13 @@ public class ClientConfigurationData implements Serializable, Cloneable {
             name = "tlsCiphers",
             value = "Set of TLS Ciphers."
     )
-    private Set<String> tlsCiphers = Sets.newTreeSet();
+    private Set<String> tlsCiphers = new TreeSet<>();
 
     @ApiModelProperty(
             name = "tlsProtocols",
             value = "Protocols of TLS."
     )
-    private Set<String> tlsProtocols = Sets.newTreeSet();
+    private Set<String> tlsProtocols = new TreeSet<>();
 
     @ApiModelProperty(
             name = "memoryLimitBytes",
@@ -287,6 +294,19 @@ public class ClientConfigurationData implements Serializable, Cloneable {
 
     @JsonIgnore
     private Clock clock = Clock.systemDefaultZone();
+
+    @ApiModelProperty(
+            name = "dnsLookupBindAddress",
+            value = "The Pulsar client dns lookup bind address, default behavior is bind on 0.0.0.0"
+    )
+    private String dnsLookupBindAddress = null;
+
+    @ApiModelProperty(
+            name = "dnsLookupBindPort",
+            value = "The Pulsar client dns lookup bind port, takes effect when dnsLookupBindAddress is configured," +
+                    " default value is 0."
+    )
+    private int dnsLookupBindPort = 0;
 
     // socks5
     @ApiModelProperty(
@@ -325,6 +345,14 @@ public class ClientConfigurationData implements Serializable, Cloneable {
             return true;
         }
         return false;
+    }
+
+    public long getLookupTimeoutMs() {
+        if (lookupTimeoutMs >= 0) {
+            return lookupTimeoutMs;
+        } else {
+            return operationTimeoutMs;
+        }
     }
 
     public ClientConfigurationData clone() {

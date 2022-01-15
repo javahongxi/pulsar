@@ -40,7 +40,7 @@ if (NOT APPLE AND NOT MSVC)
 endif()
 
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-  set(CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS "${CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS} -undefined dynamic_lookup")
+  set(CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS "${CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS} -Qunused-arguments -undefined dynamic_lookup")
 endif()
 
 # Newer boost versions don't use the -mt suffix
@@ -72,11 +72,18 @@ set(PYTHON_WRAPPER_LIBS ${Boost_PYTHON_LIBRARY}
                         ${Boost_PYTHON39_LIBRARY})
 
 if (APPLE)
-    set(PYTHON_WRAPPER_LIBS ${PYTHON_WRAPPER_LIBS}
-                            ${Boost_PYTHON27-MT_LIBRARY_RELEASE}
-                            ${Boost_PYTHON37-MT_LIBRARY_RELEASE}
-                            ${Boost_PYTHON38-MT_LIBRARY_RELEASE}
-                            ${Boost_PYTHON39-MT_LIBRARY_RELEASE})
+    if (Boost_PYTHON27-MT_LIBRARY_RELEASE)
+        set(PYTHON_WRAPPER_LIBS ${PYTHON_WRAPPER_LIBS} ${Boost_PYTHON27-MT_LIBRARY_RELEASE})
+    endif ()
+    if (Boost_PYTHON37-MT_LIBRARY_RELEASE)
+        set(PYTHON_WRAPPER_LIBS ${PYTHON_WRAPPER_LIBS} ${Boost_PYTHON37-MT_LIBRARY_RELEASE})
+    endif ()
+    if (Boost_PYTHON38-MT_LIBRARY_RELEASE)
+        set(PYTHON_WRAPPER_LIBS ${PYTHON_WRAPPER_LIBS} ${Boost_PYTHON38-MT_LIBRARY_RELEASE})
+    endif ()
+    if (Boost_PYTHON39-MT_LIBRARY_RELEASE)
+        set(PYTHON_WRAPPER_LIBS ${PYTHON_WRAPPER_LIBS} ${Boost_PYTHON39-MT_LIBRARY_RELEASE})
+    endif ()
 endif()
 
 message(STATUS "Using Boost Python libs: ${PYTHON_WRAPPER_LIBS}")

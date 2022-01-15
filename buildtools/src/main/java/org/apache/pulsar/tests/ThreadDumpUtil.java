@@ -31,14 +31,14 @@ import java.util.Date;
 import java.util.Map;
 import javax.management.JMException;
 import javax.management.ObjectName;
+import org.apache.logging.log4j.core.util.datetime.FixedDateFormat;
 
 /**
- * Adapted from Hadoop TimedOutTestsListener
+ * Adapted from Hadoop TimedOutTestsListener.
  *
  * https://raw.githubusercontent.com/apache/hadoop/master/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/test/TimedOutTestsListener.java
  */
 public class ThreadDumpUtil {
-    static final String TEST_TIMED_OUT_PREFIX = "test timed out after";
 
     private static final String INDENT = "    ";
 
@@ -68,7 +68,8 @@ public class ThreadDumpUtil {
         // fallback to using JMX for creating the thread dump
         StringBuilder dump = new StringBuilder();
 
-        DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss,SSS");
+        DateFormat dateFormat = new SimpleDateFormat(
+            FixedDateFormat.FixedFormat.ISO8601_OFFSET_DATE_TIME_HHMM.getPattern());
         dump.append(String.format("Timestamp: %s", dateFormat.format(new Date())));
         dump.append("\n\n");
 

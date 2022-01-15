@@ -29,11 +29,13 @@ import io.netty.buffer.ByteBuf;
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import org.apache.pulsar.broker.service.BrokerServiceException.TopicClosedException;
 import org.apache.pulsar.broker.service.BrokerServiceException.TopicTerminatedException;
@@ -90,6 +92,7 @@ public class Producer {
 
     private final SchemaVersion schemaVersion;
     private final String clientAddress; // IP address only, no port number included
+    private final AtomicBoolean isDisconnecting = new AtomicBoolean(false);
 
     public Producer(Topic topic, TransportCnx cnx, long producerId, String producerName, String appId,
             boolean isEncrypted, Map<String, String> metadata, SchemaVersion schemaVersion, long epoch,
@@ -124,9 +127,10 @@ public class Producer {
         stats.metadata = this.metadata;
         stats.accessMode = Commands.convertProducerAccessMode(accessMode);
 
-        this.isRemote = producerName
-                .startsWith(cnx.getBrokerService().pulsar().getConfiguration().getReplicatorPrefix());
-        this.remoteCluster = isRemote ? producerName.split("\\.")[2].split(REPL_PRODUCER_NAME_DELIMITER)[0] : null;
+
+        String replicatorPrefix = cnx.getBrokerService().pulsar().getConfiguration().getReplicatorPrefix() + ".";
+        this.isRemote = producerName.startsWith(replicatorPrefix);
+        this.remoteCluster = parseRemoteClusterName(producerName, isRemote, replicatorPrefix);
 
         this.isEncrypted = isEncrypted;
         this.schemaVersion = schemaVersion;
@@ -136,30 +140,42 @@ public class Producer {
         this.clientAddress = cnx.clientSourceAddress();
     }
 
-    @Override
-    public int hashCode() {
-        return Objects.hash(producerName);
+    /**
+     * Producer name for replicator is in format.
+     * "replicatorPrefix.localCluster" (old)
+     * "replicatorPrefix.localCluster-->remoteCluster" (new)
+     */
+    private String parseRemoteClusterName(String producerName, boolean isRemote, String replicatorPrefix) {
+        if (isRemote) {
+            String clusterName = producerName.substring(replicatorPrefix.length());
+            return clusterName.contains(REPL_PRODUCER_NAME_DELIMITER)
+                    ? clusterName.split(REPL_PRODUCER_NAME_DELIMITER)[0] : clusterName;
+        }
+        return null;
     }
 
-    @Override
-    public boolean equals(Object obj) {
-        if (obj instanceof Producer) {
-            Producer other = (Producer) obj;
-            return Objects.equals(producerName, other.producerName) && Objects.equals(topic, other.topic);
-        }
-
-        return false;
+    /**
+     * Method to determine if this producer can replace another producer.
+     * @param other - producer to compare to this one
+     * @return true if this producer is a subsequent instantiation of the same logical producer. Otherwise, false.
+     */
+    public boolean isSuccessorTo(Producer other) {
+        return Objects.equals(producerName, other.producerName)
+                && Objects.equals(topic, other.topic)
+                && producerId == other.producerId
+                && Objects.equals(cnx, other.cnx)
+                && other.getEpoch() < epoch;
     }
 
     public void publishMessage(long producerId, long sequenceId, ByteBuf headersAndPayload, long batchSize,
-            boolean isChunked) {
+            boolean isChunked, boolean isMarker) {
         if (checkAndStartPublish(producerId, sequenceId, headersAndPayload, batchSize)) {
-            publishMessageToTopic(headersAndPayload, sequenceId, batchSize, isChunked);
+            publishMessageToTopic(headersAndPayload, sequenceId, batchSize, isChunked, isMarker);
         }
     }
 
     public void publishMessage(long producerId, long lowestSequenceId, long highestSequenceId,
-            ByteBuf headersAndPayload, long batchSize, boolean isChunked) {
+            ByteBuf headersAndPayload, long batchSize, boolean isChunked, boolean isMarker) {
         if (lowestSequenceId > highestSequenceId) {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, highestSequenceId, ServerError.MetadataError,
@@ -169,7 +185,8 @@ public class Producer {
             return;
         }
         if (checkAndStartPublish(producerId, highestSequenceId, headersAndPayload, batchSize)) {
-            publishMessageToTopic(headersAndPayload, lowestSequenceId, highestSequenceId, batchSize, isChunked);
+            publishMessageToTopic(headersAndPayload, lowestSequenceId, highestSequenceId, batchSize, isChunked,
+                    isMarker);
         }
     }
 
@@ -214,19 +231,20 @@ public class Producer {
         return true;
     }
 
-    private void publishMessageToTopic(ByteBuf headersAndPayload, long sequenceId, long batchSize, boolean isChunked) {
+    private void publishMessageToTopic(ByteBuf headersAndPayload, long sequenceId, long batchSize, boolean isChunked,
+                                       boolean isMarker) {
         topic.publishMessage(headersAndPayload,
                 MessagePublishContext.get(this, sequenceId, msgIn,
                         headersAndPayload.readableBytes(), batchSize,
-                        isChunked, System.nanoTime()));
+                        isChunked, System.nanoTime(), isMarker));
     }
 
     private void publishMessageToTopic(ByteBuf headersAndPayload, long lowestSequenceId, long highestSequenceId,
-                                       long batchSize, boolean isChunked) {
+                                       long batchSize, boolean isChunked, boolean isMarker) {
         topic.publishMessage(headersAndPayload,
                 MessagePublishContext.get(this, lowestSequenceId,
                         highestSequenceId, msgIn, headersAndPayload.readableBytes(), batchSize,
-                        isChunked, System.nanoTime()));
+                        isChunked, System.nanoTime(), isMarker));
     }
 
     private boolean verifyChecksum(ByteBuf headersAndPayload) {
@@ -300,6 +318,11 @@ public class Producer {
     }
 
     private static final class MessagePublishContext implements PublishContext, Runnable {
+        /*
+         * To store context information built by message payload
+         * processors (time duration, size etc), if any configured
+         */
+        Map<String, Object> propertyMap;
         private Producer producer;
         private long sequenceId;
         private long ledgerId;
@@ -308,6 +331,7 @@ public class Producer {
         private int msgSize;
         private long batchSize;
         private boolean chunked;
+        private boolean isMarker;
 
         private long startTimeNs;
 
@@ -327,6 +351,23 @@ public class Producer {
 
         public boolean isChunked() {
             return chunked;
+        }
+
+        @Override
+        public void setProperty(String propertyName, Object value){
+            if (this.propertyMap == null) {
+                this.propertyMap = new HashMap<>();
+            }
+            this.propertyMap.put(propertyName, value);
+        }
+
+        @Override
+        public Object getProperty(String propertyName){
+            if (this.propertyMap != null) {
+                return this.propertyMap.get(propertyName);
+            } else {
+                return null;
+            }
         }
 
         @Override
@@ -428,11 +469,15 @@ public class Producer {
                 producer.chunkedMessageRate.recordEvent();
             }
             producer.publishOperationCompleted();
+            if (producer.cnx.getBrokerService().getInterceptor() != null){
+                producer.cnx.getBrokerService().getInterceptor().messageProduced(
+                        (ServerCnx) producer.cnx, producer, startTimeNs, ledgerId, entryId, this);
+            }
             recycle();
         }
 
         static MessagePublishContext get(Producer producer, long sequenceId, Rate rateIn, int msgSize,
-                long batchSize, boolean chunked, long startTimeNs) {
+                long batchSize, boolean chunked, long startTimeNs, boolean isMarker) {
             MessagePublishContext callback = RECYCLER.get();
             callback.producer = producer;
             callback.sequenceId = sequenceId;
@@ -443,11 +488,15 @@ public class Producer {
             callback.originalProducerName = null;
             callback.originalSequenceId = -1L;
             callback.startTimeNs = startTimeNs;
+            callback.isMarker = isMarker;
+            if (callback.propertyMap != null) {
+                callback.propertyMap.clear();
+            }
             return callback;
         }
 
         static MessagePublishContext get(Producer producer, long lowestSequenceId, long highestSequenceId, Rate rateIn,
-                int msgSize, long batchSize, boolean chunked, long startTimeNs) {
+                int msgSize, long batchSize, boolean chunked, long startTimeNs, boolean isMarker) {
             MessagePublishContext callback = RECYCLER.get();
             callback.producer = producer;
             callback.sequenceId = lowestSequenceId;
@@ -459,12 +508,21 @@ public class Producer {
             callback.originalSequenceId = -1L;
             callback.startTimeNs = startTimeNs;
             callback.chunked = chunked;
+            callback.isMarker = isMarker;
+            if (callback.propertyMap != null) {
+                callback.propertyMap.clear();
+            }
             return callback;
         }
 
         @Override
         public long getNumberOfMessages() {
             return batchSize;
+        }
+
+        @Override
+        public boolean isMarkerMessage() {
+            return isMarker;
         }
 
         private final Handle<MessagePublishContext> recyclerHandle;
@@ -492,6 +550,10 @@ public class Producer {
             batchSize = 0L;
             startTimeNs = -1L;
             chunked = false;
+            isMarker = false;
+            if (propertyMap != null) {
+                propertyMap.clear();
+            }
             recyclerHandle.recycle(this);
         }
     }
@@ -552,6 +614,7 @@ public class Producer {
             log.debug("Removed producer: {}", this);
         }
         closeFuture.complete(null);
+        isDisconnecting.set(false);
     }
 
     /**
@@ -561,7 +624,7 @@ public class Producer {
      * @return Completable future indicating completion of producer close
      */
     public CompletableFuture<Void> disconnect() {
-        if (!closeFuture.isDone()) {
+        if (!closeFuture.isDone() && isDisconnecting.compareAndSet(false, true)) {
             log.info("Disconnecting producer: {}", this);
             cnx.execute(() -> {
                 cnx.closeProducer(this);
@@ -646,11 +709,11 @@ public class Producer {
     }
 
     public void publishTxnMessage(TxnID txnID, long producerId, long sequenceId, long highSequenceId,
-                                  ByteBuf headersAndPayload, long batchSize, boolean isChunked) {
+                                  ByteBuf headersAndPayload, long batchSize, boolean isChunked, boolean isMarker) {
         checkAndStartPublish(producerId, sequenceId, headersAndPayload, batchSize);
         topic.publishTxnMessage(txnID, headersAndPayload,
                 MessagePublishContext.get(this, sequenceId, highSequenceId, msgIn,
-                        headersAndPayload.readableBytes(), batchSize, isChunked, System.nanoTime()));
+                        headersAndPayload.readableBytes(), batchSize, isChunked, System.nanoTime(), isMarker));
     }
 
     public SchemaVersion getSchemaVersion() {
@@ -667,6 +730,10 @@ public class Producer {
 
     public String getClientAddress() {
         return clientAddress;
+    }
+
+    public boolean isDisconnecting() {
+        return isDisconnecting.get();
     }
 
     private static final Logger log = LoggerFactory.getLogger(Producer.class);

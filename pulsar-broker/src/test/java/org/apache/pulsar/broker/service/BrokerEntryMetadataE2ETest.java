@@ -18,17 +18,26 @@
  */
 package org.apache.pulsar.broker.service;
 
+import static org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo.LedgerInfo;
+
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import lombok.Cleanup;
+import org.apache.bookkeeper.mledger.ManagedCursor;
+import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.apache.pulsar.client.impl.MessageImpl;
 import org.apache.pulsar.common.api.proto.BrokerEntryMetadata;
 import org.assertj.core.util.Sets;
+import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -59,6 +68,7 @@ public class BrokerEntryMetadataE2ETest extends BrokerTestBase {
                 "org.apache.pulsar.common.intercept.AppendBrokerTimestampMetadataInterceptor",
                 "org.apache.pulsar.common.intercept.AppendIndexMetadataInterceptor"
                 ));
+        conf.setExposingBrokerEntryMetadataToClientEnabled(true);
         baseSetup();
     }
 
@@ -273,6 +283,120 @@ public class BrokerEntryMetadataE2ETest extends BrokerTestBase {
                 .subscriptionType(SubscriptionType.Exclusive)
                 .subscriptionName(subscription)
                 .subscribe();
-        consumer.getLastMessageId();
+    }
+
+    @Test(timeOut = 20000)
+    public void testConsumerGetBrokerEntryMetadataForIndividualMessage() throws Exception {
+        final String topic = newTopicName();
+        final String subscription = "my-sub";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topic)
+                .enableBatching(false)
+                .create();
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionType(SubscriptionType.Exclusive)
+                .subscriptionName(subscription)
+                .subscribe();
+
+        long sendTime = System.currentTimeMillis();
+
+        final int messages = 10;
+        for (int i = 0; i < messages; i++) {
+            producer.send(String.valueOf(i).getBytes());
+        }
+
+        for (int i = 0; i < messages; i++) {
+            Message<byte[]> received = consumer.receive();
+            Assert.assertTrue(
+                    received.hasBrokerPublishTime() && received.getBrokerPublishTime().orElse(-1L) >= sendTime);
+            Assert.assertTrue(received.hasIndex() && received.getIndex().orElse(-1L) == i);
+        }
+
+        producer.close();
+        consumer.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testConsumerGetBrokerEntryMetadataForBatchMessage() throws Exception {
+        final String topic = newTopicName();
+        final String subscription = "my-sub";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topic)
+                .enableBatching(true)
+                .batchingMaxPublishDelay(1, TimeUnit.MINUTES)
+                .create();
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionType(SubscriptionType.Exclusive)
+                .subscriptionName(subscription)
+                .subscribe();
+
+        long sendTime = System.currentTimeMillis();
+
+        int numOfMessages;
+        // batch 1
+        for (numOfMessages = 0; numOfMessages < 5; numOfMessages++) {
+            producer.sendAsync(String.valueOf(numOfMessages).getBytes());
+        }
+        producer.flush();
+        // batch 2
+        for (; numOfMessages < 10; numOfMessages++) {
+            producer.sendAsync(String.valueOf(numOfMessages).getBytes());
+        }
+        producer.flush();
+
+        for (int i = 0; i < numOfMessages; i++) {
+            Message<byte[]> received = consumer.receive();
+            Assert.assertTrue(
+                    received.hasBrokerPublishTime() && received.getBrokerPublishTime().orElse(-1L) >= sendTime);
+            Assert.assertTrue(received.hasIndex() && received.getIndex().orElse(-1L) == i);
+        }
+
+        producer.close();
+        consumer.close();
+    }
+
+    @Test
+    public void testManagedLedgerTotalSize() throws Exception {
+        final String topic = newTopicName();
+        final int messages = 10;
+
+        admin.topics().createNonPartitionedTopic(topic);
+        admin.lookups().lookupTopic(topic);
+        final ManagedLedgerImpl managedLedger = pulsar.getBrokerService().getTopicIfExists(topic).get()
+                .map(topicObject -> (ManagedLedgerImpl) ((PersistentTopic) topicObject).getManagedLedger())
+                .orElse(null);
+        Assert.assertNotNull(managedLedger);
+        final ManagedCursor cursor = managedLedger.openCursor("cursor"); // prevent ledgers being removed
+
+        @Cleanup
+        final Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
+                .topic(topic)
+                .create();
+        for (int i = 0; i < messages; i++) {
+            producer.send("msg-" + i);
+        }
+
+        Assert.assertTrue(managedLedger.getTotalSize() > 0);
+
+        managedLedger.getConfig().setMinimumRolloverTime(0, TimeUnit.MILLISECONDS);
+        managedLedger.getConfig().setMaxEntriesPerLedger(1);
+        managedLedger.rollCurrentLedgerIfFull();
+
+        Awaitility.await().atMost(Duration.ofSeconds(3))
+                .until(() -> managedLedger.getLedgersInfo().size() > 1);
+
+        final List<LedgerInfo> ledgerInfoList = managedLedger.getLedgersInfoAsList();
+        Assert.assertEquals(ledgerInfoList.size(), 2);
+        Assert.assertEquals(ledgerInfoList.get(0).getSize(), managedLedger.getTotalSize());
+
+        cursor.close();
     }
 }

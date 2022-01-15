@@ -51,11 +51,12 @@ import static org.apache.commons.lang.StringUtils.isNotEmpty;
 import static org.apache.commons.lang3.StringUtils.isEmpty;
 import static org.apache.pulsar.common.functions.Utils.BUILTIN;
 import static org.apache.pulsar.common.util.ClassLoaderUtils.loadJar;
+import static org.apache.pulsar.functions.utils.FunctionCommon.convertFromFunctionDetailsSubscriptionPosition;
 
 @Slf4j
 public class FunctionConfigUtils {
 
-	static final Integer MAX_PENDING_ASYNC_REQUESTS_DEFAULT = Integer.valueOf(1000);
+	static final Integer MAX_PENDING_ASYNC_REQUESTS_DEFAULT = 1000;
 	static final Boolean FORWARD_SOURCE_MESSAGE_PROPERTY_DEFAULT = Boolean.TRUE;
 
     private static final ObjectMapper OBJECT_MAPPER = ObjectMapperFactory.create();
@@ -116,7 +117,7 @@ public class FunctionConfigUtils {
                                     .setIsRegexPattern(false)
                                     .build());
                 } catch (JsonProcessingException e) {
-                    throw new IllegalArgumentException(String.format("Incorrect custom schema inputs ,Topic %s ", topicName));
+                    throw new IllegalArgumentException(String.format("Incorrect custom schema inputs,Topic %s ", topicName));
                 }
             });
         }
@@ -163,14 +164,15 @@ public class FunctionConfigUtils {
         }
 
         // Set subscription position
-        Function.SubscriptionPosition subPosition;
-        if (functionConfig.getSubscriptionPosition() == SubscriptionInitialPosition.Earliest) {
-            subPosition = Function.SubscriptionPosition.EARLIEST;
-        } else {
-            subPosition = Function.SubscriptionPosition.LATEST;
+        if (functionConfig.getSubscriptionPosition() != null) {
+            Function.SubscriptionPosition subPosition = null;
+            if (SubscriptionInitialPosition.Earliest == functionConfig.getSubscriptionPosition()) {
+                subPosition = Function.SubscriptionPosition.EARLIEST;
+            } else {
+                subPosition = Function.SubscriptionPosition.LATEST;
+            }
+            sourceSpecBuilder.setSubscriptionPosition(subPosition);
         }
-
-        sourceSpecBuilder.setSubscriptionPosition(subPosition);
 
         if (typeArgs != null) {
             sourceSpecBuilder.setTypeClassName(typeArgs[0].getName());
@@ -210,7 +212,7 @@ public class FunctionConfigUtils {
                     sinkSpecBuilder.putAllConsumerProperties(consumerConfig.getConsumerProperties());
                 }
             } catch (JsonProcessingException e) {
-                throw new IllegalArgumentException(String.format("Incorrect custom schema outputs ,Topic %s ", functionConfig.getOutput()));
+                throw new IllegalArgumentException(String.format("Incorrect custom schema outputs,Topic %s ", functionConfig.getOutput()));
             }
         }
         if (typeArgs != null) {
@@ -373,6 +375,11 @@ public class FunctionConfigUtils {
 
         functionConfig.setCleanupSubscription(functionDetails.getSource().getCleanupSubscription());
         functionConfig.setAutoAck(functionDetails.getAutoAck());
+
+        // Set subscription position
+        functionConfig.setSubscriptionPosition(
+                convertFromFunctionDetailsSubscriptionPosition(functionDetails.getSource().getSubscriptionPosition()));
+
         if (functionDetails.getSource().getTimeoutMs() != 0) {
             functionConfig.setTimeoutMs(functionDetails.getSource().getTimeoutMs());
         }

@@ -26,8 +26,7 @@ Deploying a Pulsar cluster consists of the following steps:
 
 Currently, Pulsar is available for 64-bit **macOS**, **Linux**, and **Windows**. To use Pulsar, you need to install 64-bit JRE/JDK 8 or later versions.
 
->**Tips**
->
+>**Tips**  
 > You can reuse existing Zookeeper clusters.
 
 To run Pulsar on bare metal, the following configuration is recommended:
@@ -37,8 +36,7 @@ To run Pulsar on bare metal, the following configuration is recommended:
   * 3 for running a Pulsar broker, and a [BookKeeper](https://bookkeeper.apache.org) bookie
 * A single [DNS](https://en.wikipedia.org/wiki/Domain_Name_System) name covering all of the Pulsar broker hosts
 
-> **Note**
-> 
+> **Note**  
 > * Broker is only supported on 64-bit JVM.
 > * If you do not have enough machines, or you want to test Pulsar in cluster mode (and expand the cluster later), You can fully deploy Pulsar on a node on which ZooKeeper, bookie and broker run.
 > * If you do not have a DNS server, you can use the multi-host format in the service URL instead.
@@ -64,6 +62,28 @@ For machines running a bookie and a Pulsar broker, more powerful machines are re
 
 * Fast CPUs and 10Gbps [NIC](https://en.wikipedia.org/wiki/Network_interface_controller) (for Pulsar brokers)
 * Small and fast [solid-state drives](https://en.wikipedia.org/wiki/Solid-state_drive) (SSDs) or [hard disk drives](https://en.wikipedia.org/wiki/Hard_disk_drive) (HDDs) with a [RAID](https://en.wikipedia.org/wiki/RAID) controller and a battery-backed write cache (for BookKeeper bookies)
+
+#### Hardware recommendations
+
+To start a Pulsar instance, below are the minimum and the recommended hardware settings.
+
+A cluster consists of 3 broker nodes, 3 bookie nodes, and 3 ZooKeeper nodes. The following recommendation is suitable for one node.
+
+- The minimum hardware settings (**250 Pulsar topics**)
+   
+   Component | CPU|Memory|Storage|Throughput |Rate
+   |---|---|---|---|---|---
+   Broker|0.2|256 MB|/|Write throughput: 3 MB/s<br><br />Read throughput: 6 MB/s<br><br />|Write rate: 350 entries/s<br><br />Read rate: 650 entries/s
+   Bookie|0.2|256 MB|Journal: 8 GB<br><br />PD-SSDLedger: 16 GB, PD-STANDARD|Write throughput: 2 MB/s<br><br />Read throughput: 2 MB/s<br><br />|Write rate: 200 entries/s<br><br />Read rate: 200 entries/s
+   ZooKeeper|0.05|256 MB|Log: 8 GB, PD-SSD<br><br />Data: 2 GB, PD-STANDARD|/|/
+
+- The recommended hardware settings (**1000 Pulsar topics**)
+
+   Component | CPU|Memory|Storage|Throughput |Rate
+   |---|---|---|---|---|---
+   Broker|8|8 GB|/|Write throughput: 100 MB/s<br><br />Read throughput: 200 MB/s<br><br />|Write rate: 10,000 entries/s<br><br />Read rate: 20,000 entries/s
+   Bookie|4|8GB|Journal: 256 GB<br><br />PD-SSDLedger: 2 TB, PD-STANDARD|Write throughput: 75 MB/s<br><br />Read throughput: 75 MB/s<br><br />|Write rate: 7,500 entries/s<br><br />Read rate: 7,500 entries/s
+   ZooKeeper|1|2 GB|Log: 64 GB, PD-SSD<br><br />Data: 256 GB, PD-STANDARD|/|/
 
 ## Install the Pulsar binary package
 
@@ -168,7 +188,7 @@ For more details of how to configure tiered storage feature, you can refer to th
 
 ## Deploy a ZooKeeper cluster
 
-> If you already have an exsiting zookeeper cluster and want to use it, you can skip this section.
+> If you already have an existing zookeeper cluster and want to use it, you can skip this section.
 
 [ZooKeeper](https://zookeeper.apache.org) manages a variety of essential coordination-related and configuration-related tasks for Pulsar. To deploy a Pulsar cluster, you need to deploy ZooKeeper first. A 3-node ZooKeeper cluster is the recommended configuration. Pulsar does not make heavy use of ZooKeeper, so the lightweight machines or VMs should suffice for running ZooKeeper.
 
@@ -179,8 +199,16 @@ server.1=zk1.us-west.example.com:2888:3888
 server.2=zk2.us-west.example.com:2888:3888
 server.3=zk3.us-west.example.com:2888:3888
 ```
-
 > If you only have one machine on which to deploy Pulsar, you only need to add one server entry in the configuration file.
+
+> If your machines are behind NAT use 0.0.0.0 as server entry for the local address. If the node use external IP in configuration for itself, behind NAT, zookeper service won't start because it tries to put a listener on an external ip that the linux box doesn't own. Using 0.0.0.0 start a listener on ALL ip, so that NAT network traffic can reach it.
+
+Example of configuration on _server.3_
+```properties
+server.1=zk1.us-west.example.com:2888:3888
+server.2=zk2.us-west.example.com:2888:3888
+server.3=0.0.0.0:2888:3888
+```
 
 On each host, you need to specify the ID of the node in the `myid` file, which is in the `data/zookeeper` folder of each server by default (you can change the file location via the [`dataDir`](reference-configuration.md#zookeeper-dataDir) parameter).
 
@@ -372,7 +400,7 @@ You can start a broker in the background using the [`pulsar-daemon`](reference-c
 $ bin/pulsar-daemon start broker
 ```
 
-Once you succesfully start up all the brokers that you intend to use, your Pulsar cluster should be ready to go!
+Once you successfully start up all the brokers that you intend to use, your Pulsar cluster should be ready to go!
 
 ## Connect to the running cluster
 

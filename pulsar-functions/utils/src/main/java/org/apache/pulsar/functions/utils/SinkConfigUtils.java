@@ -34,7 +34,6 @@ import org.apache.pulsar.common.functions.FunctionConfig;
 import org.apache.pulsar.common.functions.Resources;
 import org.apache.pulsar.common.io.ConnectorDefinition;
 import org.apache.pulsar.common.io.SinkConfig;
-import org.apache.pulsar.common.io.SourceConfig;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.nar.NarClassLoader;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
@@ -55,6 +54,7 @@ import java.util.Map;
 
 import static org.apache.commons.lang3.StringUtils.isEmpty;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
+import static org.apache.pulsar.functions.utils.FunctionCommon.convertFromFunctionDetailsSubscriptionPosition;
 import static org.apache.pulsar.functions.utils.FunctionCommon.convertProcessingGuarantee;
 import static org.apache.pulsar.functions.utils.FunctionCommon.getSinkType;
 
@@ -93,6 +93,8 @@ public class SinkConfigUtils {
         if (sinkConfig.getProcessingGuarantees() != null) {
             functionDetailsBuilder.setProcessingGuarantees(
                     convertProcessingGuarantee(sinkConfig.getProcessingGuarantees()));
+        } else {
+            functionDetailsBuilder.setProcessingGuarantees(Function.ProcessingGuarantees.ATLEAST_ONCE);
         }
 
         // set source spec
@@ -172,6 +174,11 @@ public class SinkConfigUtils {
         }
         if (sinkConfig.getTimeoutMs() != null) {
             sourceSpecBuilder.setTimeoutMs(sinkConfig.getTimeoutMs());
+        }
+        if (sinkConfig.getCleanupSubscription() != null) {
+            sourceSpecBuilder.setCleanupSubscription(sinkConfig.getCleanupSubscription());
+        } else {
+            sourceSpecBuilder.setCleanupSubscription(true);
         }
         if (sinkConfig.getNegativeAckRedeliveryDelayMs() != null && sinkConfig.getNegativeAckRedeliveryDelayMs() > 0) {
             sourceSpecBuilder.setNegativeAckRedeliveryDelayMs(sinkConfig.getNegativeAckRedeliveryDelayMs());
@@ -278,14 +285,25 @@ public class SinkConfigUtils {
         if (!isEmpty(functionDetails.getSource().getSubscriptionName())) {
             sinkConfig.setSourceSubscriptionName(functionDetails.getSource().getSubscriptionName());
         }
-        if (functionDetails.getSource().getSubscriptionType() == Function.SubscriptionType.FAILOVER) {
-            sinkConfig.setRetainOrdering(true);
-            sinkConfig.setProcessingGuarantees(FunctionConfig.ProcessingGuarantees.EFFECTIVELY_ONCE);
-        } else {
-            sinkConfig.setRetainOrdering(false);
-            sinkConfig.setProcessingGuarantees(FunctionConfig.ProcessingGuarantees.ATLEAST_ONCE);
+
+        switch (functionDetails.getSource().getSubscriptionType()) {
+            case FAILOVER:
+                sinkConfig.setRetainOrdering(true);
+                break;
+            default:
+                sinkConfig.setRetainOrdering(false);
         }
+
+        sinkConfig.setProcessingGuarantees(convertProcessingGuarantee(functionDetails.getProcessingGuarantees()));
+
         sinkConfig.setAutoAck(functionDetails.getAutoAck());
+        sinkConfig.setCleanupSubscription(functionDetails.getSource().getCleanupSubscription());
+
+        // Set subscription position
+        sinkConfig.setSourceSubscriptionPosition(
+                convertFromFunctionDetailsSubscriptionPosition(functionDetails.getSource().getSubscriptionPosition()));
+        sinkConfig.setCleanupSubscription(functionDetails.getSource().getCleanupSubscription());
+
         if (functionDetails.getSource().getTimeoutMs() != 0) {
             sinkConfig.setTimeoutMs(functionDetails.getSource().getTimeoutMs());
         }
@@ -320,6 +338,7 @@ public class SinkConfigUtils {
             resources.setCpu(functionDetails.getResources().getCpu());
             resources.setRam(functionDetails.getResources().getRam());
             resources.setDisk(functionDetails.getResources().getDisk());
+            sinkConfig.setResources(resources);
         }
 
         if (isNotBlank(functionDetails.getRuntimeFlags())) {
@@ -393,7 +412,7 @@ public class SinkConfigUtils {
             sinkClass = sinkClassLoader.loadClass(sinkClassName);
         } catch (ClassNotFoundException e) {
             throw new IllegalArgumentException(
-                    String.format("Sink class %s not found in class loader", sinkClassName, e));
+                    String.format("Sink class %s not found in class loader", sinkClassName), e);
         }
 
         // extract type from sink class
@@ -558,6 +577,9 @@ public class SinkConfigUtils {
         if (newConfig.getTimeoutMs() != null) {
             mergedConfig.setTimeoutMs(newConfig.getTimeoutMs());
         }
+        if (newConfig.getCleanupSubscription() != null) {
+            mergedConfig.setCleanupSubscription(newConfig.getCleanupSubscription());
+        }
         if (!StringUtils.isEmpty(newConfig.getArchive())) {
             mergedConfig.setArchive(newConfig.getArchive());
         }
@@ -567,6 +589,10 @@ public class SinkConfigUtils {
         if (!StringUtils.isEmpty(newConfig.getCustomRuntimeOptions())) {
             mergedConfig.setCustomRuntimeOptions(newConfig.getCustomRuntimeOptions());
         }
+        if (newConfig.getCleanupSubscription() != null) {
+            mergedConfig.setCleanupSubscription(newConfig.getCleanupSubscription());
+        }
+
         return mergedConfig;
     }
 

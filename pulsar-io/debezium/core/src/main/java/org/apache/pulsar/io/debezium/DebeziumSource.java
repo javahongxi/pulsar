@@ -18,9 +18,9 @@
  */
 package org.apache.pulsar.io.debezium;
 
-import java.util.Map;
-
 import io.debezium.relational.HistorizedRelationalDatabaseConnectorConfig;
+import io.debezium.relational.history.DatabaseHistory;
+import java.util.Map;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.io.core.SourceContext;
@@ -60,8 +60,8 @@ public abstract class DebeziumSource extends KafkaConnectSource {
         String tenant = sourceContext.getTenant();
         String namespace = sourceContext.getNamespace();
 
-        return (StringUtils.isEmpty(tenant) ? TopicName.PUBLIC_TENANT : tenant) + "/" +
-            (StringUtils.isEmpty(namespace) ? TopicName.DEFAULT_NAMESPACE : namespace);
+        return (StringUtils.isEmpty(tenant) ? TopicName.PUBLIC_TENANT : tenant) + "/"
+                + (StringUtils.isEmpty(namespace) ? TopicName.DEFAULT_NAMESPACE : namespace);
     }
 
     public abstract void setDbConnectorTask(Map<String, Object> config) throws Exception;
@@ -95,6 +95,9 @@ public abstract class DebeziumSource extends KafkaConnectSource {
         // offset.storage.topic: offset topic name
         setConfigIfNull(config, PulsarKafkaWorkerConfig.OFFSET_STORAGE_TOPIC_CONFIG,
             topicNamespace + "/" + sourceName + "-" + DEFAULT_OFFSET_TOPIC);
+
+        config.put(DatabaseHistory.CONFIGURATION_FIELD_PREFIX_STRING + "pulsar.client.builder",
+                SerDeUtils.serialize(sourceContext.getPulsarClientBuilder()));
 
         super.open(config, sourceContext);
     }

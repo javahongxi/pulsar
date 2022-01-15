@@ -19,6 +19,11 @@
 package org.apache.pulsar.common.policies.data.stats;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import lombok.AccessLevel;
 import lombok.Data;
 import lombok.Getter;
@@ -26,12 +31,6 @@ import org.apache.pulsar.common.policies.data.PublisherStats;
 import org.apache.pulsar.common.policies.data.ReplicatorStats;
 import org.apache.pulsar.common.policies.data.SubscriptionStats;
 import org.apache.pulsar.common.policies.data.TopicStats;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.TreeMap;
 
 /**
  * Statistics for a Pulsar topic.
@@ -77,6 +76,9 @@ public class TopicStatsImpl implements TopicStats {
     /** Get estimated total unconsumed or backlog size in bytes. */
     public long backlogSize;
 
+    /** Get the publish time of the earliest message over all the backlogs. */
+    public long earliestMsgPublishTimeInBacklogs;
+
     /** Space used to store the offloaded messages for the topic/. */
     public long offloadedStorageSize;
 
@@ -114,6 +116,9 @@ public class TopicStatsImpl implements TopicStats {
     /** The serialized size of non-contiguous deleted messages ranges. */
     public int nonContiguousDeletedMessagesRangesSerializedSize;
 
+    /** The compaction stats. */
+    public CompactionStatsImpl compaction;
+
     public List<? extends PublisherStats> getPublishers() {
         return publishers;
     }
@@ -130,6 +135,7 @@ public class TopicStatsImpl implements TopicStats {
         this.publishers = new ArrayList<>();
         this.subscriptions = new HashMap<>();
         this.replication = new TreeMap<>();
+        this.compaction = new CompactionStatsImpl();
     }
 
     public void reset() {
@@ -157,6 +163,7 @@ public class TopicStatsImpl implements TopicStats {
         this.lastOffloadLedgerId = 0;
         this.lastOffloadFailureTimeStamp = 0;
         this.lastOffloadSuccessTimeStamp = 0;
+        this.compaction.reset();
     }
 
     // if the stats are added for the 1st time, we will need to make a copy of these stats and add it to the current

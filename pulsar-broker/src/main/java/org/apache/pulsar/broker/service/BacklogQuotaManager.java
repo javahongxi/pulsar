@@ -18,58 +18,49 @@
  */
 package org.apache.pulsar.broker.service;
 
-import static org.apache.pulsar.broker.cache.ConfigurationCacheService.POLICIES;
 import com.google.common.collect.Lists;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedCursor.IndividualDeletedEntries;
+import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
-import org.apache.bookkeeper.mledger.proto.MLDataFormats;
+import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo;
 import org.apache.pulsar.broker.PulsarService;
-import org.apache.pulsar.broker.admin.AdminResource;
+import org.apache.pulsar.broker.resources.NamespaceResources;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
-import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
-import org.apache.pulsar.common.policies.data.Policies;
-import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.apache.pulsar.common.policies.data.impl.BacklogQuotaImpl;
 import org.apache.pulsar.common.util.FutureUtil;
-import org.apache.pulsar.zookeeper.ZooKeeperDataCache;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+@Slf4j
 public class BacklogQuotaManager {
-    private static final Logger log = LoggerFactory.getLogger(BacklogQuotaManager.class);
     private final BacklogQuotaImpl defaultQuota;
-    private final ZooKeeperDataCache<Policies> zkCache;
-    private final PulsarService pulsar;
-    private final boolean isTopicLevelPoliciesEnable;
-
+    private final NamespaceResources namespaceResources;
 
     public BacklogQuotaManager(PulsarService pulsar) {
-        this.isTopicLevelPoliciesEnable = pulsar.getConfiguration().isTopicLevelPoliciesEnabled();
+        double backlogQuotaGB = pulsar.getConfiguration().getBacklogQuotaDefaultLimitGB();
         this.defaultQuota = BacklogQuotaImpl.builder()
-                .limitSize(pulsar.getConfiguration().getBacklogQuotaDefaultLimitGB()
-                        * BacklogQuotaImpl.BYTES_IN_GIGABYTE)
+                .limitSize(backlogQuotaGB > 0 ? (long) (backlogQuotaGB * BacklogQuotaImpl.BYTES_IN_GIGABYTE)
+                        : pulsar.getConfiguration().getBacklogQuotaDefaultLimitBytes())
                 .limitTime(pulsar.getConfiguration().getBacklogQuotaDefaultLimitSecond())
                 .retentionPolicy(pulsar.getConfiguration().getBacklogQuotaDefaultRetentionPolicy())
                 .build();
-        this.zkCache = pulsar.getConfigurationCache().policiesCache();
-        this.pulsar = pulsar;
+        this.namespaceResources = pulsar.getPulsarResources().getNamespaceResources();
     }
 
     public BacklogQuotaImpl getDefaultQuota() {
         return this.defaultQuota;
     }
 
-    public BacklogQuotaImpl getBacklogQuota(String namespace, String policyPath, BacklogQuotaType backlogQuotaType) {
+    public BacklogQuotaImpl getBacklogQuota(NamespaceName namespace, BacklogQuotaType backlogQuotaType) {
         try {
-            return zkCache.get(policyPath)
+            return namespaceResources.getPolicies(namespace)
                     .map(p -> (BacklogQuotaImpl) p.backlog_quota_map
                             .getOrDefault(backlogQuotaType, defaultQuota))
                     .orElse(defaultQuota);
@@ -79,32 +70,6 @@ public class BacklogQuotaManager {
         }
     }
 
-    public BacklogQuotaImpl getBacklogQuota(TopicName topicName, BacklogQuotaType backlogQuotaType) {
-        String policyPath = AdminResource.path(POLICIES, topicName.getNamespace());
-        if (!isTopicLevelPoliciesEnable) {
-            return getBacklogQuota(topicName.getNamespace(), policyPath, backlogQuotaType);
-        }
-
-        try {
-            return Optional.ofNullable(pulsar.getTopicPoliciesService().getTopicPolicies(topicName))
-                    .map(TopicPolicies::getBackLogQuotaMap)
-                    .map(map -> map.get(backlogQuotaType.name()))
-                    .orElseGet(() -> getBacklogQuota(topicName.getNamespace(), policyPath, backlogQuotaType));
-        } catch (Exception e) {
-            log.warn("Failed to read topic policies data, will apply the namespace backlog quota: topicName={}",
-                    topicName, e);
-        }
-        return getBacklogQuota(topicName.getNamespace(), policyPath, backlogQuotaType);
-    }
-
-    public long getBacklogQuotaLimitInSize(TopicName topicName) {
-        return getBacklogQuota(topicName, BacklogQuotaType.destination_storage).getLimitSize();
-    }
-
-    public int getBacklogQuotaLimitInTime(TopicName topicName) {
-        return getBacklogQuota(topicName, BacklogQuotaType.message_age).getLimitTime();
-    }
-
     /**
      * Handle exceeded size backlog by using policies set in the zookeeper for given topic.
      *
@@ -112,8 +77,7 @@ public class BacklogQuotaManager {
      */
     public void handleExceededBacklogQuota(PersistentTopic persistentTopic, BacklogQuotaType backlogQuotaType,
                                            boolean preciseTimeBasedBacklogQuotaCheck) {
-        TopicName topicName = TopicName.get(persistentTopic.getName());
-        BacklogQuota quota = getBacklogQuota(topicName, backlogQuotaType);
+        BacklogQuota quota = persistentTopic.getBacklogQuota(backlogQuotaType);
         log.info("Backlog quota type {} exceeded for topic [{}]. Applying [{}] policy", backlogQuotaType,
                 persistentTopic.getName(), quota.getPolicy());
         switch (quota.getPolicy()) {
@@ -238,17 +202,22 @@ public class BacklogQuotaManager {
             Long currentMillis = ((ManagedLedgerImpl) persistentTopic.getManagedLedger()).getClock().millis();
             ManagedLedgerImpl mLedger = (ManagedLedgerImpl) persistentTopic.getManagedLedger();
             try {
-                Long ledgerId =  mLedger.getCursors().getSlowestReaderPosition().getLedgerId();
-                MLDataFormats.ManagedLedgerInfo.LedgerInfo  ledgerInfo = mLedger.getLedgerInfo(ledgerId).get();
-                // Timestamp only > 0 if ledger has been closed
-                while (ledgerInfo.getTimestamp() > 0
-                        && currentMillis - ledgerInfo.getTimestamp() > quota.getLimitTime()) {
+                for (;;) {
                     ManagedCursor slowestConsumer = mLedger.getSlowestConsumer();
-                    // skip whole ledger for the slowest cursor
-                    slowestConsumer.resetCursor(mLedger.getNextValidPosition(
-                            PositionImpl.get(ledgerInfo.getLedgerId(), ledgerInfo.getEntries() - 1)));
-                    ledgerId =  mLedger.getCursors().getSlowestReaderPosition().getLedgerId();
-                    ledgerInfo = mLedger.getLedgerInfo(ledgerId).get();
+                    Position oldestPosition = slowestConsumer.getMarkDeletedPosition();
+                    ManagedLedgerInfo.LedgerInfo ledgerInfo = mLedger.getLedgerInfo(oldestPosition.getLedgerId()).get();
+                    // Timestamp only > 0 if ledger has been closed
+                    if (ledgerInfo.getTimestamp() > 0
+                            && currentMillis - ledgerInfo.getTimestamp() > quota.getLimitTime()) {
+                        // skip whole ledger for the slowest cursor
+                        PositionImpl nextPosition = mLedger.getNextValidPosition(
+                                PositionImpl.get(ledgerInfo.getLedgerId(), ledgerInfo.getEntries() - 1));
+                        if (!nextPosition.equals(oldestPosition)) {
+                            slowestConsumer.resetCursor(nextPosition);
+                            continue;
+                        }
+                    }
+                    break;
                 }
             } catch (Exception e) {
                 log.error("[{}] Error resetting cursor for slowest consumer [{}]", persistentTopic.getName(),

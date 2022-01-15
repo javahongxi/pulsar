@@ -102,12 +102,8 @@ jobs:
         uses: actions/setup-java@v2
         if: ${{ (github.event_name == 'schedule' || steps.changes.outputs.poms == 'true') && steps.cache.outputs.cache-hit != 'true' }}
         with:
-          distribution: 'adopt'
+          distribution: 'temurin'
           java-version: 11
-
-      - name: Replace maven's wagon-http version
-        if: ${{ (github.event_name == 'schedule' || steps.changes.outputs.poms == 'true') && steps.cache.outputs.cache-hit != 'true' }}
-        run: sudo ./build/replace_maven-wagon-http-version.sh
 
       - name: Download dependencies
         if: ${{ (github.event_name == 'schedule' || steps.changes.outputs.poms == 'true') && steps.cache.outputs.cache-hit != 'true' }}

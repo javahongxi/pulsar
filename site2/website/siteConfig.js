@@ -88,14 +88,14 @@ const renderEndpoint = (initializedPlugin, baseUrl, keyparts, restUrl) => {
     return rendered_content;
 };
 
-const url = 'https://pulsar.incubator.apache.org';
+const url = 'https://pulsar.apache.org';
 const javadocUrl = url + '/api';
 const restApiUrl = url + "/admin-rest-api";
 const functionsApiUrl = url + "/functions-rest-api";
 const sourceApiUrl = url + "/source-rest-api";
 const sinkApiUrl = url + "/sink-rest-api";
 const packagesApiUrl = url + "/packages-rest-api";
-const githubUrl = 'https://github.com/apache/incubator-pulsar';
+const githubUrl = 'https://github.com/apache/pulsar';
 const baseUrl = '/';
 
 const siteVariables = {
